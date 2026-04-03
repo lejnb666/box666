@@ -400,6 +400,3 @@ services:
 - [FAISS](https://github.com/facebookresearch/faiss)
 - [Flask](https://flask.palletsprojects.com/)
 
----
-
-**Made with ❤️ by the Digital Person Team**
