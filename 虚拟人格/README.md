@@ -388,11 +388,7 @@ services:
 
 本项目采用 MIT 许可证 - 查看 [LICENSE](LICENSE) 文件了解详情
 
-## 📞 联系方式
 
-- 项目维护者：[你的名字]
-- 邮箱：your.email@example.com
-- GitHub：[@yourusername](https://github.com/yourusername)
 
 ## 🙏 致谢
 
