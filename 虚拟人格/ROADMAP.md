@@ -297,14 +297,6 @@
 - 客户满意度
 - 市场份额
 
-## 📞 反馈渠道
-
-我们欢迎各种形式的反馈和建议：
-
-- GitHub Issues: [项目问题反馈](https://github.com/yourusername/digital-person-chat/issues)
-- 功能建议: [功能需求提交](https://github.com/yourusername/digital-person-chat/discussions)
-- 社区讨论: [开发者社区](https://github.com/yourusername/digital-person-chat/discussions)
-- 邮件联系: your.email@example.com
 
 ## 🤝 贡献指南
 
