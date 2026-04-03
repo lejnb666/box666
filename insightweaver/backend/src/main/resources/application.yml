@@ -1,0 +1,114 @@
+spring:
+  application:
+    name: insightweaver-backend
+
+  # Database Configuration
+  datasource:
+    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DB:insightweaver}
+    username: ${POSTGRES_USER:postgres}
+    password: ${POSTGRES_PASSWORD:postgres123}
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+
+  # Redis Configuration
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      database: ${REDIS_DB:0}
+      timeout: 60000
+
+  # RabbitMQ Configuration
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USERNAME:guest}
+    password: ${RABBITMQ_PASSWORD:guest}
+    virtual-host: ${RABBITMQ_VHOST:/}
+
+  # Web Configuration
+  web:
+    cors:
+      allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000}
+      allowed-methods: ${CORS_ALLOWED_METHODS:GET,POST,PUT,DELETE,OPTIONS}
+      allowed-headers: ${CORS_ALLOWED_HEADERS:Content-Type,Authorization,X-Requested-With}
+      allow-credentials: true
+
+server:
+  port: 8080
+  servlet:
+    context-path: /api/v1
+
+# Security Configuration
+jwt:
+  secret: ${JWT_SECRET_KEY:your_jwt_secret_key_here_make_it_very_long_and_random}
+  expiration: ${JWT_EXPIRATION_TIME:86400000}
+
+# AI Engine Configuration
+ai:
+  engine:
+    url: http://${AI_ENGINE_HOST:localhost}:${AI_ENGINE_PORT:8000}
+    api-key: ${AI_ENGINE_API_KEY:your_ai_engine_api_key}
+
+# Rate Limiting
+rate:
+  limit:
+    requests: ${RATE_LIMIT_REQUESTS:100}
+    window: ${RATE_LIMIT_WINDOW:3600}
+
+# Logging Configuration
+logging:
+  level:
+    com.insightweaver: ${LOG_LEVEL:INFO}
+    org.springframework.web: INFO
+    org.springframework.security: INFO
+  file:
+    name: ${LOG_FILE_PATH:./logs/application.log}
+
+# Actuator Configuration
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: when_authorized
+    metrics:
+      enabled: true
+    prometheus:
+      enabled: true
+
+# File Upload Configuration
+spring:
+  servlet:
+    multipart:
+      max-file-size: ${UPLOAD_MAX_SIZE:10MB}
+      max-request-size: ${UPLOAD_MAX_SIZE:10MB}
+
+# Application-specific Configuration
+insightweaver:
+  debug: ${DEBUG_MODE:false}
+  enable-swagger: ${ENABLE_SWAGGER:true}
+  max-concurrent-tasks: 10
+  task-timeout-minutes: 30
+
+  # SSE Configuration
+  sse:
+    heartbeat-interval: 30000
+    max-connections: 1000
+
+  # Task Queue Configuration
+  queue:
+    research-task-queue: research.tasks
+    agent-response-queue: agent.responses
+    notification-queue: notifications

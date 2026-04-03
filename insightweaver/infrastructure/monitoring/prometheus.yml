@@ -1,0 +1,130 @@
+# Prometheus Configuration for InsightWeaver
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  scrape_timeout: 10s
+
+  # External labels to attach to any time series or alerts
+  external_labels:
+    monitor: 'insightweaver-monitor'
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+  - static_configs:
+    - targets:
+      - 'alertmanager:9093'
+
+# Load rules once and periodically evaluate them according to the global 'evaluation_interval'
+rules_files:
+  - 'alerts/*.yml'
+  - 'recording_rules/*.yml'
+
+# Scrape configurations
+scrape_configs:
+  # Backend service metrics
+  - job_name: 'insightweaver-backend'
+    scrape_interval: 10s
+    metrics_path: '/api/v1/actuator/prometheus'
+    static_configs:
+      - targets: ['backend:8080']
+    labels:
+      service: 'backend'
+      environment: 'production'
+
+  # AI Engine metrics
+  - job_name: 'insightweaver-ai-engine'
+    scrape_interval: 10s
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['ai-engine:8000']
+    labels:
+      service: 'ai-engine'
+      environment: 'production'
+
+  # Frontend metrics (via Node Exporter)
+  - job_name: 'insightweaver-frontend'
+    scrape_interval: 30s
+    static_configs:
+      - targets: ['frontend:3000']
+    labels:
+      service: 'frontend'
+      environment: 'production'
+
+  # Database metrics
+  - job_name: 'postgres'
+    scrape_interval: 30s
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+    labels:
+      service: 'postgres'
+      environment: 'production'
+
+  # Redis metrics
+  - job_name: 'redis'
+    scrape_interval: 30s
+    static_configs:
+      - targets: ['redis-exporter:9121']
+    labels:
+      service: 'redis'
+      environment: 'production'
+
+  # RabbitMQ metrics
+  - job_name: 'rabbitmq'
+    scrape_interval: 30s
+    static_configs:
+      - targets: ['rabbitmq-exporter:9419']
+    labels:
+      service: 'rabbitmq'
+      environment: 'production'
+
+  # Node metrics for infrastructure monitoring
+  - job_name: 'node'
+    scrape_interval: 30s
+    static_configs:
+      - targets: ['node-exporter:9100']
+    labels:
+      service: 'node'
+      environment: 'production'
+
+  # Blackbox exporter for endpoint monitoring
+  - job_name: 'blackbox'
+    scrape_interval: 1m
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+        - http://frontend:80
+        - http://backend:8080/api/v1/actuator/health
+        - http://ai-engine:8000/health
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+# Remote write configuration (optional, for long-term storage)
+remote_write:
+  - url: http://mimir:9009/api/v1/push
+    write_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'go_.*'
+        action: drop
+
+# Remote read configuration (optional)
+remote_read:
+  - url: http://mimir:9009/api/v1/query
+
+# Storage configuration
+storage:
+  tsdb:
+    path: /prometheus
+    retention.time: 15d
+    retention.size: 50GB
+    wal_compression: true
+    head_blocks_max: 5
+    max_samples_per_query: 50000000
