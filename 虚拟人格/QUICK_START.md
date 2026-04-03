@@ -370,26 +370,3 @@ digital-person-chat/
    ```bash
    python rag-engine/rag_engine.py
    ```
-
-## 📞 获取帮助
-
-### 在线资源
-
-- **项目文档**: [README.md](README.md)
-- **部署指南**: [DEPLOYMENT.md](DEPLOYMENT.md)
-- **路线图**: [ROADMAP.md](ROADMAP.md)
-- **API文档**: 见项目文档
-
-### 社区支持
-
-- **GitHub Issues**: 报告问题
-- **Discussions**: 功能讨论
-- **Wiki**: 详细文档
-- **Discord**: 实时交流
-
-
----
-
-**恭喜！你已经成功启动了数字人聊天系统。现在可以开始体验AI对话的乐趣了！** 🎉
-
-**遇到问题？查看常见问题或联系我们的支持团队。** 💪
