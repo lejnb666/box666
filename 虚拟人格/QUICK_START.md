@@ -387,11 +387,6 @@ digital-person-chat/
 - **Wiki**: 详细文档
 - **Discord**: 实时交流
 
-### 联系方式
-
-- 邮箱: your.email@example.com
-- GitHub: [@yourusername](https://github.com/yourusername)
-- 微信群: 添加小助手
 
 ---
 
