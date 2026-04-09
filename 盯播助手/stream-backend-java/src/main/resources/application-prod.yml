@@ -1,0 +1,82 @@
+# 生产环境配置
+spring:
+  datasource:
+    url: jdbc:mysql://prod-mysql:3306/stream_monitor?useUnicode=true&characterEncoding=utf8&useSSL=true&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+    username: ${DB_USERNAME:stream_user}
+    password: ${DB_PASSWORD:strong_password}
+    hikari:
+      minimum-idle: 10
+      maximum-pool-size: 50
+      connection-timeout: 30000
+  redis:
+    host: ${REDIS_HOST:prod-redis}
+    port: ${REDIS_PORT:6379}
+    password: ${REDIS_PASSWORD:redis_password}
+    database: 0
+  rabbitmq:
+    host: ${RABBITMQ_HOST:prod-rabbitmq}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USERNAME:stream_user}
+    password: ${RABBITMQ_PASSWORD:rabbitmq_password}
+  data:
+    mongodb:
+      host: ${MONGODB_HOST:prod-mongodb}
+      port: ${MONGODB_PORT:27017}
+      database: ${MONGODB_DATABASE:stream_monitor}
+      username: ${MONGODB_USERNAME:mongo_admin}
+      password: ${MONGODB_PASSWORD:mongo_password}
+      authentication-database: admin
+      grid-fs-database: stream_monitor
+
+logging:
+  level:
+    com.streammonitor: info
+    org.springframework.web: info
+    com.baomidou.mybatisplus: warn
+  file:
+    name: /var/log/stream-monitor/app.log
+    max-size: 100MB
+    max-history: 60
+
+server:
+  port: ${SERVER_PORT:8080}
+  tomcat:
+    max-threads: 200
+    min-spare-threads: 20
+    max-connections: 8192
+    accept-count: 100
+
+app:
+  config:
+    jwt:
+      secret: ${JWT_SECRET:strong_production_jwt_secret_key}
+    wechat:
+      app-id: ${WECHAT_APP_ID:}
+      app-secret: ${WECHAT_APP_SECRET:}
+      template-ids:
+        live-start: ${WECHAT_TEMPLATE_LIVE_START:your_live_start_template_id}
+        product-launch: ${WECHAT_TEMPLATE_PRODUCT_LAUNCH:your_product_launch_template_id}
+        keyword-match: ${WECHAT_TEMPLATE_KEYWORD_MATCH:your_keyword_match_template_id}
+    ai:
+      api-key: ${AI_API_KEY:}
+    crawler:
+      interval: 30
+      max-concurrent-tasks: 1000
+    notification:
+      rate-limit: 10
+      retry-count: 3
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: when-authorized
+    metrics:
+      enabled: true
+  metrics:
+    export:
+      prometheus:
+        enabled: true
