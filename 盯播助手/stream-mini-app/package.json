@@ -1,0 +1,28 @@
+{
+  "name": "stream-monitor-miniapp",
+  "version": "1.0.0",
+  "description": "盯播助手微信小程序",
+  "main": "main.js",
+  "scripts": {
+    "dev:mp-weixin": "uni",
+    "build:mp-weixin": "uni build -p mp-weixin",
+    "dev:mp-alipay": "uni",
+    "build:mp-alipay": "uni build -p mp-alipay"
+  },
+  "dependencies": {
+    "@dcloudio/uni-app": "^3.0.0-3090820231219001",
+    "@dcloudio/uni-ui": "^1.4.24",
+    "pinia": "^2.0.28",
+    "uview-ui": "^1.8.8"
+  },
+  "devDependencies": {
+    "@dcloudio/types": "^3.3.2",
+    "@dcloudio/uni-cli-shared": "^3.0.0-3090820231219001",
+    "@dcloudio/uni-app-plus": "^3.0.0-3090820231219001",
+    "@dcloudio/uni-components": "^3.0.0-3090820231219001",
+    "@dcloudio/uni-mp-weixin": "^3.0.0-3090820231219001",
+    "@dcloudio/uni-mp-alipay": "^3.0.0-3090820231219001",
+    "@dcloudio/vite-plugin-uni": "^3.0.0-3090820231219001",
+    "vite": "^4.0.0"
+  }
+}
