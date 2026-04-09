@@ -1,0 +1,47 @@
+# Spring Boot后端Dockerfile
+
+# 使用官方OpenJDK 17镜像作为基础镜像
+FROM openjdk:17-jdk-slim
+
+# 设置工作目录
+WORKDIR /app
+
+# 设置时区
+ENV TZ=Asia/Shanghai
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+
+# 安装必要的工具
+RUN apt-get update && apt-get install -y \
+    curl \
+    net-tools \
+    vim \
+    && rm -rf /var/lib/apt/lists/*
+
+# 创建应用用户
+RUN groupadd -r appuser && useradd -r -g appuser appuser
+
+# 复制Maven wrapper和pom.xml以利用Docker层缓存
+COPY pom.xml .
+COPY .mvn .mvn
+COPY mvnw .
+
+# 下载依赖（这会创建一个缓存层）
+RUN ./mvnw dependency:go-offline -B
+
+# 复制源代码
+COPY src ./src
+
+# 编译应用
+RUN ./mvnw clean package -DskipTests
+
+# 创建日志目录
+RUN mkdir -p /app/logs && chown -R appuser:appuser /app
+
+# 切换到应用用户
+USER appuser
+
+# 暴露端口
+EXPOSE 8080
+
+# 启动应用
+CMD ["java", "-Djava.security.egd=file:/dev/./urandom", "-jar", "target/stream-backend-1.0.0.jar"]
