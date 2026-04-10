@@ -5,6 +5,8 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.streammonitor.mapper.MonitoringTaskMapper;
 import com.streammonitor.model.entity.MonitoringTask;
 import com.streammonitor.service.MonitoringTaskService;
+import com.streammonitor.common.BusinessException;
+import com.streammonitor.common.ResultCode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -32,16 +34,15 @@ public class MonitoringTaskServiceImpl implements MonitoringTaskService {
     // 状态常量定义，避免魔法值
     private static final int STATUS_ACTIVE = 1;
     private static final int STATUS_STOPPED = 0;
+    private static final int STATUS_ARCHIVED = -1; // 新增：归档/逻辑删除状态
 
     @Override
     public List<MonitoringTask> getTaskList(Long userId, String keyword, Integer status, Boolean todayTrigger) {
         try {
             LambdaQueryWrapper<MonitoringTask> queryWrapper = new LambdaQueryWrapper<>();
+            queryWrapper.eq(MonitoringTask::getUserId, userId)
+                        .ne(MonitoringTask::getStatus, STATUS_ARCHIVED); // 过滤已归档任务
 
-            // 用户过滤
-            queryWrapper.eq(MonitoringTask::getUserId, userId);
-
-            // 关键词搜索
             if (keyword != null && !keyword.trim().isEmpty()) {
                 queryWrapper.and(wrapper -> wrapper
                     .like(MonitoringTask::getStreamerName, keyword)
@@ -52,12 +53,10 @@ public class MonitoringTaskServiceImpl implements MonitoringTaskService {
                 );
             }
 
-            // 状态过滤
             if (status != null) {
                 queryWrapper.eq(MonitoringTask::getStatus, status);
             }
 
-            // 今日触发过滤
             if (todayTrigger != null && todayTrigger) {
                 LocalDateTime startOfDay = LocalDateTime.of(LocalDate.now(), LocalTime.MIN);
                 LocalDateTime endOfDay = LocalDateTime.of(LocalDate.now(), LocalTime.MAX);
@@ -65,276 +64,169 @@ public class MonitoringTaskServiceImpl implements MonitoringTaskService {
                            .le(MonitoringTask::getLastTriggeredAt, endOfDay);
             }
 
-            // 按创建时间倒序
             queryWrapper.orderByDesc(MonitoringTask::getCreatedAt);
-
             return taskMapper.selectList(queryWrapper);
         } catch (Exception e) {
             log.error("获取任务列表失败，用户ID: {}", userId, e);
-            throw new RuntimeException("获取任务列表失败", e); // 修复：抛出运行时异常
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "获取任务列表失败", e);
         }
     }
 
     @Override
     public MonitoringTask getTaskById(Long taskId) {
-        try {
-            return taskMapper.selectById(taskId);
-        } catch (Exception e) {
-            log.error("获取任务失败，任务ID: {}", taskId, e);
-            throw new RuntimeException("获取任务失败", e);
-        }
+        return taskMapper.selectById(taskId);
     }
 
     @Override
     @Transactional(rollbackFor = Exception.class)
     public boolean createTask(MonitoringTask task) {
-        try {
-            log.info("创建监控任务: {}", task);
-
-            // 设置创建时间
-            task.setCreatedAt(LocalDateTime.now());
-            task.setUpdatedAt(LocalDateTime.now());
-
-            // 初始化触发次数
-            if (task.getTriggerCount() == null) {
-                task.setTriggerCount(0);
-            }
-
-            int result = taskMapper.insert(task);
-
-            if (result > 0) {
-                log.info("任务创建成功，任务ID: {}", task.getId());
-                return true;
-            } else {
-                log.warn("任务创建失败，插入结果: {}", result);
-                return false;
-            }
-        } catch (Exception e) {
-            log.error("创建任务异常", e);
-            throw new RuntimeException("创建任务异常", e);
+        log.info("创建监控任务: {}", task);
+        task.setCreatedAt(LocalDateTime.now());
+        task.setUpdatedAt(LocalDateTime.now());
+        task.setStatus(STATUS_STOPPED); // 默认创建为停止状态
+        if (task.getTriggerCount() == null) {
+            task.setTriggerCount(0);
         }
+        return taskMapper.insert(task) > 0;
     }
 
     @Override
     @Transactional(rollbackFor = Exception.class)
     public boolean updateTask(MonitoringTask task) {
-        try {
-            log.info("更新监控任务: {}", task.getId());
-
-            // 设置更新时间
-            task.setUpdatedAt(LocalDateTime.now());
-
-            int result = taskMapper.updateById(task);
-
-            if (result > 0) {
-                log.info("任务更新成功，任务ID: {}", task.getId());
-                return true;
-            } else {
-                log.warn("任务更新失败，更新结果: {}", result);
-                return false;
-            }
-        } catch (Exception e) {
-            log.error("更新任务异常，任务ID: {}", task.getId(), e);
-            throw new RuntimeException("更新任务异常", e);
-        }
+        log.info("更新监控任务: {}", task.getId());
+        task.setUpdatedAt(LocalDateTime.now());
+        return taskMapper.updateById(task) > 0;
     }
 
     @Override
     @Transactional(rollbackFor = Exception.class)
     public boolean deleteTask(Long taskId) {
-        try {
-            log.info("删除监控任务，任务ID: {}", taskId);
-
-            int result = taskMapper.deleteById(taskId);
-
-            if (result > 0) {
-                log.info("任务删除成功，任务ID: {}", taskId);
-                return true;
-            } else {
-                log.warn("任务删除失败，删除结果: {}", result);
-                return false;
-            }
-        } catch (Exception e) {
-            log.error("删除任务异常，任务ID: {}", taskId, e);
-            throw new RuntimeException("删除任务异常", e);
+        log.info("请求删除监控任务，任务ID: {}", taskId);
+        MonitoringTask existingTask = taskMapper.selectById(taskId);
+        if (existingTask == null) {
+            return true;
         }
+        // 🚨 修复1：防止删除运行中的任务，避免出现爬虫端无法停止的"幽灵任务"
+        if (existingTask.getStatus() == STATUS_ACTIVE) {
+            throw new BusinessException(ResultCode.VALIDATION_ERROR, "任务正在运行中，请先停止后再删除");
+        }
+        
+        // 执行逻辑删除或物理删除
+        int result = taskMapper.deleteById(taskId);
+        return result > 0;
     }
 
     @Override
     @Transactional(rollbackFor = Exception.class)
     public boolean startTask(Long taskId) {
-        try {
-            log.info("启动监控任务，任务ID: {}", taskId);
+        log.info("启动监控任务，任务ID: {}", taskId);
+        LambdaUpdateWrapper<MonitoringTask> updateWrapper = new LambdaUpdateWrapper<>();
+        updateWrapper.eq(MonitoringTask::getId, taskId)
+                    .set(MonitoringTask::getStatus, STATUS_ACTIVE)
+                    .set(MonitoringTask::getUpdatedAt, LocalDateTime.now());
 
-            LambdaUpdateWrapper<MonitoringTask> updateWrapper = new LambdaUpdateWrapper<>();
-            updateWrapper.eq(MonitoringTask::getId, taskId)
-                        .set(MonitoringTask::getStatus, STATUS_ACTIVE)
-                        .set(MonitoringTask::getUpdatedAt, LocalDateTime.now());
-
-            // 修复：MyBatis-Plus 的 update 方法需要传入 entity（可为null）和 wrapper
-            int result = taskMapper.update(null, updateWrapper);
-
-            if (result > 0) {
-                log.info("任务启动成功，任务ID: {}", taskId);
-                return true;
-            } else {
-                log.warn("任务启动失败，更新结果: {}", result);
-                return false;
-            }
-        } catch (Exception e) {
-            log.error("启动任务异常，任务ID: {}", taskId, e);
-            throw new RuntimeException("启动任务异常", e);
-        }
+        // 注意：实际项目中这里应结合 MQ 发送启动指令，并使用 Publisher Confirms 确保一致性
+        return taskMapper.update(null, updateWrapper) > 0;
     }
 
     @Override
     @Transactional(rollbackFor = Exception.class)
     public boolean stopTask(Long taskId) {
-        try {
-            log.info("停止监控任务，任务ID: {}", taskId);
+        log.info("停止监控任务，任务ID: {}", taskId);
+        LambdaUpdateWrapper<MonitoringTask> updateWrapper = new LambdaUpdateWrapper<>();
+        updateWrapper.eq(MonitoringTask::getId, taskId)
+                    .set(MonitoringTask::getStatus, STATUS_STOPPED)
+                    .set(MonitoringTask::getUpdatedAt, LocalDateTime.now());
 
-            LambdaUpdateWrapper<MonitoringTask> updateWrapper = new LambdaUpdateWrapper<>();
-            updateWrapper.eq(MonitoringTask::getId, taskId)
-                        .set(MonitoringTask::getStatus, STATUS_STOPPED)
-                        .set(MonitoringTask::getUpdatedAt, LocalDateTime.now());
-
-            // 修复：MyBatis-Plus 的 update 方法需要两个参数
-            int result = taskMapper.update(null, updateWrapper);
-
-            if (result > 0) {
-                log.info("任务停止成功，任务ID: {}", taskId);
-                return true;
-            } else {
-                log.warn("任务停止失败，更新结果: {}", result);
-                return false;
-            }
-        } catch (Exception e) {
-            log.error("停止任务异常，任务ID: {}", taskId, e);
-            throw new RuntimeException("停止任务异常", e);
-        }
+        return taskMapper.update(null, updateWrapper) > 0;
     }
 
     @Override
     public boolean isTaskOwnedByUser(Long taskId, Long userId) {
-        try {
-            LambdaQueryWrapper<MonitoringTask> queryWrapper = new LambdaQueryWrapper<>();
-            queryWrapper.eq(MonitoringTask::getId, taskId)
-                       .eq(MonitoringTask::getUserId, userId);
-
-            return taskMapper.selectCount(queryWrapper) > 0;
-        } catch (Exception e) {
-            log.error("验证任务归属异常，任务ID: {}, 用户ID: {}", taskId, userId, e);
-            return false;
-        }
+        LambdaQueryWrapper<MonitoringTask> queryWrapper = new LambdaQueryWrapper<>();
+        queryWrapper.eq(MonitoringTask::getId, taskId)
+                   .eq(MonitoringTask::getUserId, userId);
+        return taskMapper.selectCount(queryWrapper) > 0;
     }
 
     @Override
     @Transactional(rollbackFor = Exception.class)
     public boolean incrementTriggerCount(Long taskId) {
-        try {
-            log.info("增加任务触发次数，任务ID: {}", taskId);
-
-            LambdaUpdateWrapper<MonitoringTask> updateWrapper = new LambdaUpdateWrapper<>();
-            updateWrapper.eq(MonitoringTask::getId, taskId)
-                        .setSql("trigger_count = trigger_count + 1")
-                        .set(MonitoringTask::getLastTriggeredAt, LocalDateTime.now())
-                        .set(MonitoringTask::getUpdatedAt, LocalDateTime.now());
-
-            // 修复：MyBatis-Plus 的 update 方法需要两个参数
-            int result = taskMapper.update(null, updateWrapper);
-
-            if (result > 0) {
-                log.info("任务触发次数增加成功，任务ID: {}", taskId);
-                return true;
-            } else {
-                log.warn("任务触发次数增加失败，更新结果: {}", result);
-                return false;
-            }
-        } catch (Exception e) {
-            log.error("增加任务触发次数异常，任务ID: {}", taskId, e);
-            throw new RuntimeException("增加任务触发次数异常", e);
-        }
+        LambdaUpdateWrapper<MonitoringTask> updateWrapper = new LambdaUpdateWrapper<>();
+        updateWrapper.eq(MonitoringTask::getId, taskId)
+                    .setSql("trigger_count = trigger_count + 1")
+                    .set(MonitoringTask::getLastTriggeredAt, LocalDateTime.now())
+                    .set(MonitoringTask::getUpdatedAt, LocalDateTime.now());
+        return taskMapper.update(null, updateWrapper) > 0;
     }
 
     @Override
     public int getActiveTaskCount(Long userId) {
-        try {
-            LambdaQueryWrapper<MonitoringTask> queryWrapper = new LambdaQueryWrapper<>();
-            queryWrapper.eq(MonitoringTask::getUserId, userId)
-                       .eq(MonitoringTask::getStatus, STATUS_ACTIVE);
-
-            return taskMapper.selectCount(queryWrapper).intValue();
-        } catch (Exception e) {
-            log.error("获取活跃任务数量失败，用户ID: {}", userId, e);
-            return 0;
-        }
+        LambdaQueryWrapper<MonitoringTask> queryWrapper = new LambdaQueryWrapper<>();
+        queryWrapper.eq(MonitoringTask::getUserId, userId)
+                   .eq(MonitoringTask::getStatus, STATUS_ACTIVE);
+        return taskMapper.selectCount(queryWrapper).intValue();
     }
 
     @Override
     public int getTaskCountByPlatform(String platform) {
-        try {
-            LambdaQueryWrapper<MonitoringTask> queryWrapper = new LambdaQueryWrapper<>();
-            queryWrapper.eq(MonitoringTask::getPlatform, platform);
-
-            return taskMapper.selectCount(queryWrapper).intValue();
-        } catch (Exception e) {
-            log.error("获取平台任务数量失败，平台: {}", platform, e);
-            return 0;
-        }
+        LambdaQueryWrapper<MonitoringTask> queryWrapper = new LambdaQueryWrapper<>();
+        queryWrapper.eq(MonitoringTask::getPlatform, platform)
+                   .ne(MonitoringTask::getStatus, STATUS_ARCHIVED);
+        return taskMapper.selectCount(queryWrapper).intValue();
     }
 
     @Override
     @Transactional(rollbackFor = Exception.class)
     public int batchStopTasks(List<Long> taskIds) {
-        try {
-            if (taskIds == null || taskIds.isEmpty()) {
-                return 0;
-            }
+        if (taskIds == null || taskIds.isEmpty()) {
+            return 0;
+        }
+        log.info("批量停止任务，总数量: {}", taskIds.size());
+        int totalUpdated = 0;
+        int batchSize = 500; // 🚨 修复2：分批处理，防止 SQL 的 IN 条件超长导致数据库报错
 
-            log.info("批量停止任务，任务数量: {}", taskIds.size());
-
+        for (int i = 0; i < taskIds.size(); i += batchSize) {
+            List<Long> batchList = taskIds.subList(i, Math.min(i + batchSize, taskIds.size()));
+            
             LambdaUpdateWrapper<MonitoringTask> updateWrapper = new LambdaUpdateWrapper<>();
-            updateWrapper.in(MonitoringTask::getId, taskIds)
+            updateWrapper.in(MonitoringTask::getId, batchList)
                         .set(MonitoringTask::getStatus, STATUS_STOPPED)
                         .set(MonitoringTask::getUpdatedAt, LocalDateTime.now());
-
-            // 修复：MyBatis-Plus 的 update 方法需要两个参数
-            return taskMapper.update(null, updateWrapper);
-        } catch (Exception e) {
-            log.error("批量停止任务异常", e);
-            throw new RuntimeException("批量停止任务异常", e);
+            
+            totalUpdated += taskMapper.update(null, updateWrapper);
         }
+        return totalUpdated;
     }
 
     @Override
     @Transactional(rollbackFor = Exception.class)
     public int cleanupExpiredTasks() {
-        try {
-            log.info("开始清理过期任务");
+        log.info("开始清理过期任务");
+        // 清理30天未更新的停止任务
+        LocalDateTime expireTime = LocalDateTime.now().minusDays(30);
 
-            // 清理30天未更新的停止任务
-            LocalDateTime expireTime = LocalDateTime.now().minusDays(30);
+        LambdaQueryWrapper<MonitoringTask> queryWrapper = new LambdaQueryWrapper<>();
+        queryWrapper.eq(MonitoringTask::getStatus, STATUS_STOPPED)
+                   .lt(MonitoringTask::getUpdatedAt, expireTime);
 
-            LambdaQueryWrapper<MonitoringTask> queryWrapper = new LambdaQueryWrapper<>();
-            queryWrapper.eq(MonitoringTask::getStatus, STATUS_STOPPED)
-                       .lt(MonitoringTask::getUpdatedAt, expireTime);
+        List<MonitoringTask> expiredTasks = taskMapper.selectList(queryWrapper);
 
-            List<MonitoringTask> expiredTasks = taskMapper.selectList(queryWrapper);
+        if (!expiredTasks.isEmpty()) {
+            List<Long> taskIds = expiredTasks.stream()
+                .map(MonitoringTask::getId)
+                .collect(Collectors.toList());
 
-            if (!expiredTasks.isEmpty()) {
-                List<Long> taskIds = expiredTasks.stream()
-                    .map(MonitoringTask::getId)
-                    .collect(Collectors.toList());
+            // 🚨 修复3：将物理删除(deleteBatchIds)改为归档状态，防止破坏大数据与MongoDB的历史外键关联
+            LambdaUpdateWrapper<MonitoringTask> updateWrapper = new LambdaUpdateWrapper<>();
+            updateWrapper.in(MonitoringTask::getId, taskIds)
+                        .set(MonitoringTask::getStatus, STATUS_ARCHIVED)
+                        .set(MonitoringTask::getUpdatedAt, LocalDateTime.now());
 
-                int result = taskMapper.deleteBatchIds(taskIds);
-                log.info("清理过期任务完成，清理数量: {}", result);
-                return result;
-            }
-
-            return 0;
-        } catch (Exception e) {
-            log.error("清理过期任务异常", e);
-            throw new RuntimeException("清理过期任务异常", e);
+            int result = taskMapper.update(null, updateWrapper);
+            log.info("清理过期任务完成，归档数量: {}", result);
+            return result;
         }
+        return 0;
     }
 }
