@@ -1,0 +1,13 @@
+{
+  "pages": [
+    "pages/chat/chat"
+  ],
+  "subPackages": [],
+  "window": {
+    "navigationBarTextStyle": "black",
+    "navigationBarTitleText": "数字人聊天",
+    "navigationBarBackgroundColor": "#ffffff",
+    "backgroundColor": "#f8f8f8"
+  },
+  "usingComponents": {}
+}
