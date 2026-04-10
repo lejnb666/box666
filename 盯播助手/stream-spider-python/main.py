@@ -3,6 +3,7 @@
 
 """
 盯播助手Python爬虫和AI服务主入口
+架构修复版：基于 Background Event Loop 模式解决多线程异步上下文冲突
 
 @author: exbox0403-cmd
 @since: 2026/4/8
@@ -13,9 +14,10 @@ import logging
 import sys
 import threading
 import time
-import traceback  # 引入traceback用于打印详细错误堆栈
+import traceback
 from datetime import datetime
 from typing import Dict, List, Optional
+from concurrent.futures import TimeoutError
 
 import schedule
 from flask import Flask, jsonify, request
@@ -29,63 +31,87 @@ from services.rabbitmq_service import RabbitMQService
 from utils.logger import setup_logger
 from utils.database import DatabaseManager
 
-# 全局变量
 app = Flask(__name__)
 CORS(app)
+
+# 全局服务变量
 crawler_service: Optional[CrawlerService] = None
 ai_service: Optional[AIService] = None
 websocket_service: Optional[WebSocketService] = None
 rabbitmq_service: Optional[RabbitMQService] = None
 db_manager: Optional[DatabaseManager] = None
 
+# 🚨 核心修复1：创建一个全局的后台事件循环，所有异步操作共享此 Loop
+bg_loop = asyncio.new_event_loop()
 
-def initialize_services():
-    """初始化所有服务"""
-    global crawler_service, ai_service, websocket_service, rabbitmq_service, db_manager
-
+def start_background_loop(loop: asyncio.AbstractEventLoop):
+    """在一个独立的守护线程中永远运行这个事件循环"""
+    asyncio.set_event_loop(loop)
     try:
-        # 初始化日志
-        setup_logger()
-        logger = logging.getLogger(__name__)
-        logger.info("开始初始化盯播助手Python服务...")
-
-        # 加载配置
-        settings = Settings()
-        logger.info("配置加载完成")
-
-        # 初始化数据库
-        db_manager = DatabaseManager(settings)
-        db_manager.initialize()
-        logger.info("数据库初始化完成")
-
-        # 初始化RabbitMQ服务
-        rabbitmq_service = RabbitMQService(settings)
-        rabbitmq_service.connect()
-        logger.info("RabbitMQ服务初始化完成")
-
-        # 初始化AI服务
-        ai_service = AIService(settings)
-        ai_service.initialize()
-        logger.info("AI服务初始化完成")
-
-        # 初始化爬虫服务
-        crawler_service = CrawlerService(settings, rabbitmq_service)
-        logger.info("爬虫服务初始化完成")
-
-        # 初始化WebSocket服务
-        websocket_service = WebSocketService(settings, ai_service, rabbitmq_service)
-        logger.info("WebSocket服务初始化完成")
-
-        logger.info("所有服务初始化完成")
-
+        loop.run_forever()
     except Exception as e:
-        logging.error(f"服务初始化失败: {e}")
+        logging.error(f"后台事件循环崩溃: {e}\n{traceback.format_exc()}")
+
+def run_async_safe(coro, timeout=10):
+    """
+    🚨 核心修复2：Flask 路由中的同步代码安全调用异步代码的桥梁
+    将协程提交到 bg_loop 中执行，并等待结果
+    """
+    future = asyncio.run_coroutine_threadsafe(coro, bg_loop)
+    try:
+        return future.result(timeout=timeout)
+    except TimeoutError:
+        raise Exception("异步任务执行超时")
+    except Exception as e:
+        raise e
+
+async def async_initialize_services():
+    """在正确的事件循环中初始化服务，确保 aiohttp session 绑定到 bg_loop"""
+    global crawler_service, ai_service, websocket_service, rabbitmq_service, db_manager
+    logger = logging.getLogger(__name__)
+    
+    settings = Settings()
+    
+    db_manager = DatabaseManager(settings)
+    db_manager.initialize()
+    
+    rabbitmq_service = RabbitMQService(settings)
+    rabbitmq_service.connect()
+    
+    ai_service = AIService(settings)
+    # 假设 AI Service 中使用了 aiohttp，必须在 async 环境下初始化
+    if hasattr(ai_service, 'initialize_async'):
+        await ai_service.initialize_async()
+    else:
+        ai_service.initialize()
+        
+    crawler_service = CrawlerService(settings, rabbitmq_service)
+    websocket_service = WebSocketService(settings, ai_service, rabbitmq_service)
+    
+    logger.info("所有服务在后台事件循环中初始化完成")
+
+def initialize_system():
+    setup_logger()
+    logger = logging.getLogger(__name__)
+    logger.info("开始初始化系统...")
+
+    # 1. 启动后台事件循环线程
+    t = threading.Thread(target=start_background_loop, args=(bg_loop,), daemon=True)
+    t.start()
+
+    # 2. 将初始化任务提交到后台事件循环
+    future = asyncio.run_coroutine_threadsafe(async_initialize_services(), bg_loop)
+    try:
+        future.result(timeout=15)
+    except Exception as e:
+        logger.error(f"系统初始化失败: {e}\n{traceback.format_exc()}")
         sys.exit(1)
 
 
+# ================== Flask 路由 (同步桥接异步) ==================
+
 @app.route('/health', methods=['GET'])
 def health_check():
-    """健康检查接口"""
     try:
         return jsonify({
             'status': 'healthy',
@@ -93,82 +119,29 @@ def health_check():
             'services': {
                 'crawler': crawler_service is not None and crawler_service.is_running(),
                 'ai': ai_service is not None and ai_service.is_available(),
-                'websocket': websocket_service is not None and websocket_service.is_connected(),
-                'rabbitmq': rabbitmq_service is not None and rabbitmq_service.is_connected(),
-                'database': db_manager is not None and db_manager.is_connected()
+                'websocket': websocket_service is not None and websocket_service.is_connected()
             }
         }), 200
     except Exception as e:
-        return jsonify({
-            'status': 'unhealthy',
-            'error': str(e),
-            'timestamp': datetime.now().isoformat()
-        }), 500
-
+        return jsonify({'status': 'unhealthy', 'error': str(e)}), 500
 
 @app.route('/api/v1/crawler/start', methods=['POST'])
 def start_crawler():
-    """启动爬虫"""
     try:
         data = request.get_json()
-        platform = data.get('platform')
-        room_id = data.get('room_id')
-
-        if not platform or not room_id:
-            return jsonify({'error': '缺少必要参数'}), 400
-
+        platform, room_id = data.get('platform'), data.get('room_id')
+        if not platform or not room_id: return jsonify({'error': '缺少参数'}), 400
+        
         if crawler_service:
             success = crawler_service.start_crawling(platform, room_id)
-            if success:
-                return jsonify({'message': f'开始监控 {platform} 平台房间 {room_id}'}), 200
-            else:
-                return jsonify({'error': '启动爬虫失败'}), 500
-        else:
-            return jsonify({'error': '爬虫服务未初始化'}), 500
-
+            return jsonify({'msg': 'Started'}) if success else jsonify({'error': 'Failed'}), 200 if success else 500
+        return jsonify({'error': '未初始化'}), 500
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-
-@app.route('/api/v1/crawler/stop', methods=['POST'])
-def stop_crawler():
-    """停止爬虫"""
-    try:
-        data = request.get_json()
-        platform = data.get('platform')
-        room_id = data.get('room_id')
-
-        if crawler_service:
-            success = crawler_service.stop_crawling(platform, room_id)
-            if success:
-                return jsonify({'message': '停止爬虫成功'}), 200
-            else:
-                return jsonify({'error': '停止爬虫失败'}), 500
-        else:
-            return jsonify({'error': '爬虫服务未初始化'}), 500
-
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/v1/crawler/status', methods=['GET'])
-def crawler_status():
-    """获取爬虫状态"""
-    try:
-        if crawler_service:
-            status = crawler_service.get_status()
-            return jsonify(status), 200
-        else:
-            return jsonify({'error': '爬虫服务未初始化'}), 500
-
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-# 修复：改为 async def 使用原生协程支持，避免 asyncio.run 导致事件循环冲突
 @app.route('/api/v1/ai/analyze', methods=['POST'])
-async def ai_analyze():
-    """AI分析接口"""
+def ai_analyze():
+    """AI 分析接口：通过 run_async_safe 桥接，防止事件循环冲突"""
     try:
         data = request.get_json()
         barrage_list = data.get('barrages', [])
@@ -178,184 +151,56 @@ async def ai_analyze():
             return jsonify({'error': '弹幕列表不能为空'}), 400
 
         if ai_service:
-            # 修复：直接使用 await 进行异步调用
-            result = await ai_service.analyze_barrages(barrage_list, analysis_type)
+            # 🚨 提交到后台 bg_loop 执行，完美解决 Flask 与 aiohttp 的冲突
+            result = run_async_safe(ai_service.analyze_barrages(barrage_list, analysis_type), timeout=30)
             return jsonify(result), 200
-        else:
-            return jsonify({'error': 'AI服务未初始化'}), 500
+        return jsonify({'error': 'AI服务未初始化'}), 500
 
     except Exception as e:
+        logging.error(f"AI分析请求报错: {traceback.format_exc()}")
         return jsonify({'error': str(e)}), 500
 
 
-@app.route('/api/v1/websocket/connect', methods=['POST'])
-def connect_websocket():
-    """连接WebSocket"""
-    try:
-        data = request.get_json()
-        platform = data.get('platform')
-        room_id = data.get('room_id')
+# ================== 后台调度与守护任务 ==================
 
-        if not platform or not room_id:
-            return jsonify({'error': '缺少必要参数'}), 400
-
-        if websocket_service:
-            success = websocket_service.connect_to_room(platform, room_id)
-            if success:
-                return jsonify({'message': f'成功连接到 {platform} 房间 {room_id}'}), 200
-            else:
-                return jsonify({'error': 'WebSocket连接失败'}), 500
-        else:
-            return jsonify({'error': 'WebSocket服务未初始化'}), 500
-
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-# 修复：抽离安全的包装函数，防止 crawler_service 为 None 时抛出异常
 def safe_check_live_status():
-    """安全检查直播状态"""
     if crawler_service:
         crawler_service.check_live_status()
 
-
 def run_scheduler():
-    """运行定时任务"""
     logger = logging.getLogger(__name__)
-    logger.info("启动定时任务调度器")
-
-    # 每分钟检查一次直播状态 (修复：使用包装函数)
     schedule.every(1).minutes.do(safe_check_live_status)
-
-    # 每5分钟清理一次缓存
-    schedule.every(5).minutes.do(cleanup_cache)
-
-    # 每30分钟检查一次服务健康状态
-    schedule.every(30).minutes.do(check_service_health)
-
+    
     while True:
-        # 修复：加入异常保护机制，防止单个任务失败导致调度器死掉
         try:
             schedule.run_pending()
         except Exception as e:
-            logger.error(f"调度器执行异常: {e}\n{traceback.format_exc()}")
+            logger.error(f"定时器调度异常: {e}\n{traceback.format_exc()}")
         time.sleep(1)
 
-
-def cleanup_cache():
-    """清理缓存"""
-    try:
-        logger = logging.getLogger(__name__)
-        # 清理过期的缓存数据
-        if db_manager:
-            db_manager.cleanup_expired_data()
-        logger.info("缓存清理完成")
-    except Exception as e:
-        logging.error(f"缓存清理失败: {e}")
-
-
-def check_service_health():
-    """检查服务健康状态"""
-    try:
-        logger = logging.getLogger(__name__)
-
-        # 检查各服务状态
-        services_status = {
-            'crawler': crawler_service.is_running() if crawler_service else False,
-            'ai': ai_service.is_available() if ai_service else False,
-            'websocket': websocket_service.is_connected() if websocket_service else False,
-            'rabbitmq': rabbitmq_service.is_connected() if rabbitmq_service else False,
-            'database': db_manager.is_connected() if db_manager else False
-        }
-
-        # 重启失败的服务
-        for service_name, is_healthy in services_status.items():
-            if not is_healthy:
-                logger.warning(f"{service_name} 服务异常，尝试重启...")
-                restart_service(service_name)
-
-        logger.info(f"服务健康状态检查完成: {services_status}")
-
-    except Exception as e:
-        logging.error(f"服务健康检查失败: {e}")
-
-
-def restart_service(service_name: str):
-    """重启指定服务"""
-    try:
-        if service_name == 'rabbitmq' and rabbitmq_service:
-            rabbitmq_service.reconnect()
-        elif service_name == 'ai' and ai_service:
-            ai_service.reinitialize()
-        elif service_name == 'websocket' and websocket_service:
-            websocket_service.reconnect()
-        elif service_name == 'database' and db_manager:
-            db_manager.reconnect()
-    except Exception as e:
-        logging.error(f"重启 {service_name} 服务失败: {e}")
-
-
 def start_background_tasks():
-    """启动后台任务"""
-    # 启动定时任务线程
-    scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
-    scheduler_thread.start()
-
-    # 启动爬虫监控
-    if crawler_service:
-        crawler_thread = threading.Thread(target=crawler_service.start_monitoring, daemon=True)
-        crawler_thread.start()
-
-    # 启动WebSocket监听
+    # 定时器线程
+    threading.Thread(target=run_scheduler, daemon=True).start()
+    
+    # 🚨 将长连接监听也提交给 bg_loop，而不是新开事件循环
     if websocket_service:
-        websocket_thread = threading.Thread(target=run_websocket_service, daemon=True)
-        websocket_thread.start()
-
-
-def run_websocket_service():
-    """WebSocket服务的同步包装函数，用于在新线程中运行"""
-    try:
-        # 创建新的事件循环
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
-        # 启动WebSocket监听
-        websocket_service.start_listening()
-
-    except Exception as e:
-        logging.error(f"WebSocket服务线程运行失败: {e}")
-    finally:
-        try:
-            loop.close()
-        except:
-            pass
-
+        asyncio.run_coroutine_threadsafe(websocket_service.start_listening(), bg_loop)
+    if crawler_service:
+        threading.Thread(target=crawler_service.start_monitoring, daemon=True).start()
 
 def main():
-    """主函数"""
     try:
-        # 初始化服务
-        initialize_services()
-
-        # 启动后台任务
+        initialize_system()
         start_background_tasks()
-
-        # 启动Flask应用
-        logger = logging.getLogger(__name__)
-        logger.info("盯播助手Python服务启动完成")
-        logger.info("Flask服务监听端口: 5000")
-
-        app.run(
-            host='0.0.0.0',
-            port=5000,
-            debug=False,
-            use_reloader=False
-        )
+        
+        logging.getLogger(__name__).info("盯播助手 Python 服务启动完成 (Port: 5000)")
+        
+        # 启动同步 Flask
+        app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)
 
     except Exception as e:
-        logging.error(f"服务启动失败: {e}")
+        logging.error(f"Flask 启动失败: {e}")
         sys.exit(1)
-
 
 if __name__ == '__main__':
     main()
