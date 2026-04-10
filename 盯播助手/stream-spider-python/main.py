@@ -12,7 +12,8 @@ import asyncio
 import logging
 import sys
 import threading
-import time  # 添加time模块导入
+import time
+import traceback  # 引入traceback用于打印详细错误堆栈
 from datetime import datetime
 from typing import Dict, List, Optional
 
@@ -164,8 +165,9 @@ def crawler_status():
         return jsonify({'error': str(e)}), 500
 
 
+# 修复：改为 async def 使用原生协程支持，避免 asyncio.run 导致事件循环冲突
 @app.route('/api/v1/ai/analyze', methods=['POST'])
-def ai_analyze():
+async def ai_analyze():
     """AI分析接口"""
     try:
         data = request.get_json()
@@ -176,8 +178,8 @@ def ai_analyze():
             return jsonify({'error': '弹幕列表不能为空'}), 400
 
         if ai_service:
-            # 使用asyncio.run包装异步调用
-            result = asyncio.run(ai_service.analyze_barrages(barrage_list, analysis_type))
+            # 修复：直接使用 await 进行异步调用
+            result = await ai_service.analyze_barrages(barrage_list, analysis_type)
             return jsonify(result), 200
         else:
             return jsonify({'error': 'AI服务未初始化'}), 500
@@ -210,13 +212,20 @@ def connect_websocket():
         return jsonify({'error': str(e)}), 500
 
 
+# 修复：抽离安全的包装函数，防止 crawler_service 为 None 时抛出异常
+def safe_check_live_status():
+    """安全检查直播状态"""
+    if crawler_service:
+        crawler_service.check_live_status()
+
+
 def run_scheduler():
     """运行定时任务"""
     logger = logging.getLogger(__name__)
     logger.info("启动定时任务调度器")
 
-    # 每分钟检查一次直播状态
-    schedule.every(1).minutes.do(crawler_service.check_live_status if crawler_service else None)
+    # 每分钟检查一次直播状态 (修复：使用包装函数)
+    schedule.every(1).minutes.do(safe_check_live_status)
 
     # 每5分钟清理一次缓存
     schedule.every(5).minutes.do(cleanup_cache)
@@ -225,8 +234,12 @@ def run_scheduler():
     schedule.every(30).minutes.do(check_service_health)
 
     while True:
-        schedule.run_pending()
-        time.sleep(1)  # 修复：使用time.sleep替代asyncio.sleep
+        # 修复：加入异常保护机制，防止单个任务失败导致调度器死掉
+        try:
+            schedule.run_pending()
+        except Exception as e:
+            logger.error(f"调度器执行异常: {e}\n{traceback.format_exc()}")
+        time.sleep(1)
 
 
 def cleanup_cache():
