@@ -376,23 +376,11 @@ services:
 - 验证和清理用户输入
 - 限制外部API调用频率
 
-## 🤝 贡献指南
-
-1. Fork项目到你的GitHub账户
-2. 创建新的功能分支 (`git checkout -b feature/amazing-feature`)
-3. 提交你的修改 (`git commit -m 'Add some amazing feature'`)
-4. 推送到分支 (`git push origin feature/amazing-feature`)
-5. 创建Pull Request
 
 ## 📄 许可证
 
 本项目采用 MIT 许可证 - 查看 [LICENSE](LICENSE) 文件了解详情
 
-## 📞 联系方式
-
-- 项目维护者：[你的名字]
-- 邮箱：your.email@example.com
-- GitHub：[@yourusername](https://github.com/yourusername)
 
 ## 🙏 致谢
 
